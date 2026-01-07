@@ -13,7 +13,7 @@ import requests
 
 st.set_page_config(layout="wide", page_title="財務シミュレーター Pro")
 
-# --- 1. フォント設定 (PDF用) ---
+# --- 1. フォント設定 ---
 @st.cache_resource
 def load_font():
     font_path = "SawarabiGothic-Regular.ttf"
@@ -33,7 +33,6 @@ FONT_NAME = load_font() or 'Helvetica'
 # --- 2. セッションステート初期化 ---
 CATS = ["売上の部", "売上原価の部", "販管費の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]
 
-# データの入れ物がない場合のみ初期化
 if 'pl_data' not in st.session_state:
     st.session_state.pl_data = {
         "売上の部": pd.DataFrame([{"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
@@ -42,14 +41,14 @@ if 'pl_data' not in st.session_state:
         "雑収益・雑損失の部": pd.DataFrame(columns=["項目", "金額(千円)", "入出金サイト(日)"]),
         "特別利益・特別損失の部": pd.DataFrame(columns=["項目", "金額(千円)", "入出金サイト(日)"])
     }
+    for cat in CATS: st.session_state[f"is_editing_{cat}"] = False
 
 if 'normal_df' not in st.session_state:
     st.session_state.normal_df = pd.DataFrame([
         {"案件名": "案件A", "受注金額(千円)": 5000, "原価率": 0.7, "開始日": datetime.today().date(), "終了日": (datetime.today() + relativedelta(months=3)).date(), "入金条件": "出来高払い", "サイト(日)": 30}
     ])
 
-if 'calc_done' not in st.session_state:
-    st.session_state.calc_done = False
+if 'calc_done' not in st.session_state: st.session_state.calc_done = False
 
 # --- 3. 補助関数 ---
 def calculate_cashflow_k(amount, start_date, end_date, condition, site_days, months_header):
@@ -76,7 +75,7 @@ app_mode = st.sidebar.radio("モード選択", ["通常モード (受注案件)"
 
 if app_mode == "通常モード (受注案件)":
     st.title("💰 通常シミュレーション")
-    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_v5")
+    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_v6")
     
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns(4)
@@ -105,75 +104,87 @@ else:
         s_date = c3.date_input("シミュレーション開始月", datetime.today().replace(day=1))
 
     st.subheader("損益計算書 各部の設定")
-    st.info("💡 入力は自動保存されます。行を増やした後は、各項目を直接入力してください。")
     
-    # 複数テーブルを同時に編集可能にする（通常モードと同じロジック）
     for cat in CATS:
         with st.expander(f"📌 {cat}", expanded=True):
-            # keyを固定し、編集内容が即座にステートに書き戻されるようにする
-            st.session_state.pl_data[cat] = st.data_editor(
-                st.session_state.pl_data[cat],
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=True,
-                key=f"editor_final_{cat}"
-            )
+            if not st.session_state[f"is_editing_{cat}"]:
+                if st.button(f"📝 {cat}を編集する", key=f"btn_e_{cat}"):
+                    st.session_state[f"is_editing_{cat}"] = True
+                    st.rerun()
+                st.dataframe(st.session_state.pl_data[cat], use_container_width=True, hide_index=True)
+            else:
+                # 編集モード：ここが重要。編集が終わるまで他の再描画を止める
+                st.warning(f"現在「{cat}」を編集中です。入力を完了し、下の「確定」ボタンを押してください。")
+                with st.container(border=True):
+                    # 編集用のテンポラリ。keyを分けることで干渉を防ぐ
+                    temp_df = st.data_editor(st.session_state.pl_data[cat], num_rows="dynamic", use_container_width=True, hide_index=True, key=f"temp_ed_{cat}")
+                    if st.button("✅ 編集を確定する", key=f"btn_fix_{cat}"):
+                        # 確定時にまとめてステートへ反映
+                        st.session_state.pl_data[cat] = temp_df.fillna({"項目": "新項目", "金額(千円)": 0, "入出金サイト(日)": 0})
+                        st.session_state[f"is_editing_{cat}"] = False
+                        st.rerun()
 
     if st.button("📉 全体計算を実行", type="primary", use_container_width=True):
         st.session_state.months_header = [(s_date + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
         st.session_state.initial_cash = init_cash
         detail, inc_list = {}, []
         for cat in CATS:
-            # データのクレンジング（Noneを0にする）
-            df_temp = st.session_state.pl_data[cat].copy()
-            for _, r in df_temp.dropna(subset=["項目"]).iterrows():
-                name, val = r["項目"], r["金額(千円)"] if pd.notna(r["金額(千円)"]) else 0
-                site = r["入出金サイト(日)"] if pd.notna(r["入出金サイト(日)"]) else 0
-                
+            for _, r in st.session_state.pl_data[cat].dropna(subset=["項目"]).iterrows():
+                name, val, site = r["項目"], r["金額(千円)"], r["入出金サイト(日)"]
                 if cat in ["売上の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]:
                     if not any(x in str(name) for x in ["損失", "損", "利息"]): inc_list.append(name)
-                
                 sm = int(round(site / 30)); vals = [0.0]*12
                 for m in range(12): 
                     if m + sm < 12: vals[m + sm] = val
                 detail[name] = vals
-        
         detail.update({"法人税等": [0.0]*12, "借入金返済": [m_loan_repay]*12, "短期借入金": [0.0]*12})
         st.session_state.manual_summary = pd.DataFrame(detail, index=st.session_state.months_header).T
         st.session_state.income_items, st.session_state.calc_done = inc_list, True
         st.rerun()
 
-# --- 5. 結果表示エリア ---
+# --- 5. 結果表示 & エクスポート ---
 if st.session_state.calc_done:
     st.divider()
     st.subheader("📋 資金繰り明細表")
     
-    # 計算後の明細表も直接編集可能にする
-    st.session_state.manual_summary = st.data_editor(st.session_state.manual_summary, use_container_width=True, hide_index=False, key="res_ed_final")
-    ms = st.session_state.manual_summary
+    # ここも以前好評だった「編集専用ボタン」方式を復活
+    if 'ms_is_editing' not in st.session_state: st.session_state.ms_is_editing = False
     
+    if not st.session_state.ms_is_editing:
+        if st.button("📝 明細表を直接修正する"):
+            st.session_state.ms_is_editing = True
+            st.rerun()
+        final_view_base = st.session_state.manual_summary
+    else:
+        st.warning("明細表を編集中です...")
+        new_ms = st.data_editor(st.session_state.manual_summary, use_container_width=True, hide_index=False, key="ms_temp_ed")
+        if st.button("✅ 修正を確定"):
+            st.session_state.manual_summary = new_ms
+            st.session_state.ms_is_editing = False
+            st.rerun()
+        final_view_base = new_ms
+
+    # 最終集計
+    ms = final_view_base
     in_sum = ms.loc[ms.index.isin(st.session_state.income_items)].sum()
     out_items = ms.index.difference(list(st.session_state.income_items) + ["短期借入金", "月次収支", "現預金残高"])
     out_sum = ms.loc[out_items].sum()
     m_cf = in_sum + ms.loc["短期借入金"] - out_sum
     c_bal = m_cf.cumsum() + st.session_state.initial_cash
-    
     final_view = pd.concat([ms, pd.DataFrame({"月次収支": m_cf, "現預金残高": c_bal}, index=st.session_state.months_header).T])
+    
     st.dataframe(final_view.style.format("{:,.0f}"), use_container_width=True)
     st.line_chart(c_bal)
 
-    # --- PDF/CSV 出力 ---
+    # --- ダウンロード機能 ---
     def generate_pdf():
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=portrait(A4), leftMargin=30, rightMargin=30)
         elements = []
         style = styles.getSampleStyleSheet()
         elements.append(Paragraph("財務シミュレーション報告書", style['Title']))
-        
         data_cf = [["項目"] + st.session_state.months_header]
-        for idx, row in final_view.iterrows(): 
-            data_cf.append([idx] + [f"{v:,.0f}" for v in row.values])
-        
+        for idx, row in final_view.iterrows(): data_cf.append([idx] + [f"{v:,.0f}" for v in row.values])
         t = Table(data_cf, hAlign='LEFT')
         t.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 6), ('GRID', (0,0), (-1,-1), 0.5, colors.grey)]))
         elements.append(t)
@@ -181,6 +192,6 @@ if st.session_state.calc_done:
         return buffer.getvalue()
 
     st.sidebar.divider()
-    st.sidebar.subheader("📥 データの出力")
-    st.sidebar.download_button("📄 PDFダウンロード", data=generate_pdf(), file_name=f"report_{datetime.now().strftime('%Y%m%d')}.pdf")
-    st.sidebar.download_button("📊 CSVダウンロード", data=final_view.to_csv().encode('utf_8_sig'), file_name="data.csv", mime="text/csv")
+    st.sidebar.subheader("📥 出力")
+    st.sidebar.download_button("📄 PDFダウンロード", data=generate_pdf(), file_name="report.pdf")
+    st.sidebar.download_button("📊 CSVダウンロード", data=final_view.to_csv().encode('utf_8_sig'), file_name="data.csv")
