@@ -90,15 +90,14 @@ with st.form("input_form"):
     with c3: monthly_loan = st.number_input("月間借入返済 (円)", value=500000, step=100000)
     with c4: start_period = st.date_input("開始月", datetime.today().replace(day=1))
     
-    submitted = st.form_submit_button("🚀 計算を実行する")
+    submitted = st.form_submit_button("🚀 計算を実行（明細表をリセット）")
 
 # --- 5. 計算と表示 ---
-if submitted or 'calculated' in st.session_state:
-    st.session_state.calculated = True
+months_header = [(start_period + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
+
+# 「計算実行」が押された場合、または初期状態のみ自動計算を行う
+if submitted or 'manual_summary' not in st.session_state:
     st.session_state.df = edited_df
-    months_header = [(start_period + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
-    
-    # 案件ごとの自動計算
     valid_df = edited_df[edited_df["案件名"].fillna("") != ""].copy()
     total_income = pd.Series(0.0, index=months_header)
     total_cost = pd.Series(0.0, index=months_header)
@@ -109,69 +108,67 @@ if submitted or 'calculated' in st.session_state:
         total_income += calculate_row_cashflow(amt, row["開始日"], row["終了日"], row["入金条件"], row["サイト(日)"], months_header)
         total_cost += calculate_row_cashflow(amt * rate, row["開始日"], row["終了日"], row["入金条件"], row["サイト(日)"], months_header)
 
-    # 初期データの構築（編集可能なデータフレーム用）
-    if 'manual_summary' not in st.session_state or submitted:
-        init_summary = pd.DataFrame({
-            "入金合計": total_income,
-            "原価支払合計": total_cost,
-            "販管費": monthly_sga,
-            "借入返済": monthly_loan,
-            "短期借入金": 0.0 # ②短期借入金の行を追加
-        }).T
-        st.session_state.manual_summary = init_summary
+    # 明細表の初期値を保存
+    st.session_state.manual_summary = pd.DataFrame({
+        "入金合計": total_income,
+        "原価支払合計": total_cost,
+        "販管費": monthly_sga,
+        "借入返済": monthly_loan,
+        "短期借入金": 0.0
+    }).T
 
-    st.subheader("📊 資金繰り明細表 (各数値は直接編集可能です)")
-    # ①明細表をハンドでいじれるように設定
-    edited_summary = st.data_editor(
-        st.session_state.manual_summary,
-        use_container_width=True,
-        hide_index=False
-    )
-    st.session_state.manual_summary = edited_summary
+# 資金繰り明細表の編集（セッションステートから読み込み、変更を保存）
+st.subheader("📊 資金繰り明細表 (各数値は直接編集可能です)")
+# keyを指定することで、編集状態が戻るのを防ぐ
+edited_summary = st.data_editor(
+    st.session_state.manual_summary,
+    use_container_width=True,
+    key="summary_editor"
+)
+# 編集された結果を即座にセッションに反映
+st.session_state.manual_summary = edited_summary
 
-    # 収支計算のやり直し（手入力反映後）
-    # 月次収支 = 入金合計 + 短期借入金 - 原価支払 - 販管費 - 借入返済
-    current_income = edited_summary.loc["入金合計"]
-    current_cost = edited_summary.loc["原価支払合計"]
-    current_sga = edited_summary.loc["販管費"]
-    current_loan_repay = edited_summary.loc["借入返済"]
-    short_term_loan = edited_summary.loc["短期借入金"]
+# 最終収支の計算
+current_income = edited_summary.loc["入金合計"]
+current_cost = edited_summary.loc["原価支払合計"]
+current_sga = edited_summary.loc["販管費"]
+current_loan_repay = edited_summary.loc["借入返済"]
+short_term_loan = edited_summary.loc["短期借入金"]
 
-    monthly_cf = current_income + short_term_loan - current_cost - current_sga - current_loan_repay
-    cash_balance = monthly_cf.cumsum() + initial_cash
+monthly_cf = current_income + short_term_loan - current_cost - current_sga - current_loan_repay
+cash_balance = monthly_cf.cumsum() + initial_cash
 
-    # 結果まとめの表示
-    final_view = pd.concat([edited_summary, pd.DataFrame({"月次収支": monthly_cf, "現預金残高": cash_balance}).T])
-    st.write("### 計算結果反映")
-    st.dataframe(final_view.style.format("{:,.0f}"), use_container_width=True)
+# 表示用まとめ
+final_view = pd.concat([edited_summary, pd.DataFrame({"月次収支": monthly_cf, "現預金残高": cash_balance}, index=months_header).T])
+st.write("### 計算結果反映")
+st.dataframe(final_view.style.format("{:,.0f}"), use_container_width=True)
 
-    st.subheader("📈 資金繰り推移グラフ")
-    st.line_chart(cash_balance)
+st.subheader("📈 資金繰り推移グラフ")
+st.line_chart(cash_balance)
 
-    # --- 6. PDF生成 (編集後のデータを反映) ---
-    def create_pdf():
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=landscape(A3), leftMargin=30, rightMargin=30, topMargin=30)
-        elements = []
-        style_sheet = styles.getSampleStyleSheet()
-        
-        title_style = style_sheet['Title']
-        title_style.fontName = FONT_NAME
-        title_style.alignment = 0
-        elements.append(Paragraph(f"資金繰りシミュレーション報告書 ({datetime.now().strftime('%Y/%m/%d')})", title_style))
-        elements.append(Spacer(1, 20))
+# --- 6. PDF生成 ---
+def create_pdf():
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A3), leftMargin=30, rightMargin=30, topMargin=30)
+    elements = []
+    style_sheet = styles.getSampleStyleSheet()
+    
+    title_style = style_sheet['Title']
+    title_style.fontName = FONT_NAME
+    title_style.alignment = 0
+    elements.append(Paragraph(f"資金繰りシミュレーション報告書 ({datetime.now().strftime('%Y/%m/%d')})", title_style))
+    elements.append(Spacer(1, 20))
 
-        # 明細表 (左詰め)
-        elements.append(Paragraph("【資金繰り明細表】", style_sheet['Normal']))
-        detail_data = [["項目"] + months_header]
-        for idx, row in final_view.iterrows():
-            detail_data.append([idx] + [f"{v:,.0f}" for v in row.values])
-        t_det = Table(detail_data, hAlign='LEFT')
-        t_det.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 8), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('ALIGN', (0,0), (-1,-1), 'LEFT')]))
-        elements.append(t_det)
+    elements.append(Paragraph("【資金繰り明細表】", style_sheet['Normal']))
+    detail_data = [["項目"] + months_header]
+    for idx, row in final_view.iterrows():
+        detail_data.append([idx] + [f"{v:,.0f}" for v in row.values])
+    t_det = Table(detail_data, hAlign='LEFT')
+    t_det.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 8), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('ALIGN', (0,0), (-1,-1), 'LEFT')]))
+    elements.append(t_det)
 
-        doc.build(elements)
-        return buffer.getvalue()
+    doc.build(elements)
+    return buffer.getvalue()
 
-    st.divider()
-    st.download_button(label="📄 報告書PDFをダウンロード", data=create_pdf(), file_name=f"cashflow_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+st.divider()
+st.download_button(label="📄 報告書PDFをダウンロード", data=create_pdf(), file_name=f"cashflow_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
