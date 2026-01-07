@@ -35,10 +35,26 @@ FONT_NAME = load_font() or 'Helvetica'
 CATS = ["売上の部", "売上原価の部", "販管費の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]
 
 if 'pl_data' not in st.session_state:
+    # デフォルト項目の定義
     st.session_state.pl_data = {
-        "売上の部": pd.DataFrame([{"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
-        "売上原価の部": pd.DataFrame([{"項目": "外注費", "金額(千円)": 3000, "入出金サイト(日)": 30}]),
-        "販管費の部": pd.DataFrame([{"項目": "役員報酬", "金額(千円)": 1000, "入出金サイト(日)": 0}]),
+        "売上の部": pd.DataFrame([
+            {"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}
+        ]),
+        "売上原価の部": pd.DataFrame([
+            {"項目": "外注費", "金額(千円)": 0, "入出金サイト(日)": 30},
+            {"項目": "労務費", "金額(千円)": 0, "入出金サイト(日)": 30},
+            {"項目": "材料費", "金額(千円)": 0, "入出金サイト(日)": 30},
+            {"項目": "減価償却費", "金額(千円)": 0, "入出金サイト(日)": 0},
+            {"項目": "修繕費", "金額(千円)": 0, "入出金サイト(日)": 30}
+        ]),
+        "販管費の部": pd.DataFrame([
+            {"項目": "役員報酬", "金額(千円)": 0, "入出金サイト(日)": 0},
+            {"項目": "人件費", "金額(千円)": 0, "入出金サイト(日)": 0},
+            {"項目": "保険料", "金額(千円)": 0, "入出金サイト(日)": 0},
+            {"項目": "減価償却費", "金額(千円)": 0, "入出金サイト(日)": 0},
+            {"項目": "修繕費", "金額(千円)": 0, "入出金サイト(日)": 30},
+            {"項目": "交際費", "金額(千円)": 0, "入出金サイト(日)": 30}
+        ]),
         "雑収益・雑損失の部": pd.DataFrame(columns=["項目", "金額(千円)", "入出金サイト(日)"]),
         "特別利益・特別損失の部": pd.DataFrame(columns=["項目", "金額(千円)", "入出金サイト(日)"])
     }
@@ -79,7 +95,7 @@ app_mode = st.sidebar.radio("モード選択", ["通常モード (受注案件)"
 
 if app_mode == "通常モード (受注案件)":
     st.title("💰 通常シミュレーション")
-    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_final")
+    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_v8")
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns(4)
         init_cash = c1.number_input("期首現金(千円)", value=10000)
@@ -120,7 +136,6 @@ else:
         st.session_state.months_header = [(s_date + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
         st.session_state.initial_cash = init_cash
         
-        # 損益と資金繰りの計算用器
         pl_dict = {cat: pd.Series(0.0, index=st.session_state.months_header) for cat in CATS}
         cf_detail, inc_list = {}, []
 
@@ -131,10 +146,8 @@ else:
                 val = float(r["金額(千円)"]) if pd.notna(r["金額(千円)"]) else 0.0
                 site = float(r["入出金サイト(日)"]) if pd.notna(r["入出金サイト(日)"]) else 0.0
                 
-                # PL用（発生主義：サイトに関係なく当月発生）
                 pl_dict[cat] += val
                 
-                # CF用（現金主義：サイトを考慮）
                 if cat in ["売上の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]:
                     if not any(x in name for x in ["損失", "損", "利息", "税"]): inc_list.append(name)
                 
@@ -143,7 +156,7 @@ else:
                     if m + sm < 12: vals[m + sm] = val
                 cf_detail[name] = vals
         
-        # 利益の階層計算（PL作成）
+        # 利益の階層計算
         rev = pl_dict["売上の部"]
         cogs = pl_dict["売上原価の部"]
         gp = rev - cogs
@@ -168,8 +181,6 @@ else:
 # --- 5. 結果表示エリア ---
 if st.session_state.calc_done:
     st.divider()
-    
-    # 損益試算表の表示（詳細モードのみ）
     if app_mode == "詳細モード (損益計算書)":
         st.subheader("📈 損益試算表 (月次PL)")
         st.dataframe(st.session_state.pl_summary.style.format("{:,.0f}"), use_container_width=True)
@@ -205,7 +216,7 @@ if st.session_state.calc_done:
             elements.append(Paragraph("【2. 月次損益試算表】", s['Normal']))
             pl_data = [["項目"] + st.session_state.months_header] + [[i] + [f"{v:,.0f}" for v in r] for i, r in st.session_state.pl_summary.iterrows()]
             t2 = Table(pl_data, hAlign='LEFT')
-            t2.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 7), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('BACKGROUND', (0,2), (-1,2), colors.lightgrey), ('BACKGROUND', (0,4), (-1,4), colors.lightgrey)]))
+            t2.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 7), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('BACKGROUND', (0,2), (-1,2), colors.lightgrey), ('BACKGROUND', (0,4), (-1,4), colors.lightgrey), ('BACKGROUND', (0,6), (-1,6), colors.lightgrey)]))
             elements.append(t2); elements.append(Spacer(1, 20))
 
         # 3. 資金繰り明細
