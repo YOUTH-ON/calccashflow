@@ -33,7 +33,7 @@ def load_font():
 
 FONT_NAME = load_font() or 'Helvetica'
 
-# --- 2. データの初期化 ---
+# --- 2. セッション情報の初期化 ---
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame([
         {"案件名": "案件A", "受注金額": 5000000, "原価率": 0.7, "開始日": datetime.today().date(), "終了日": (datetime.today() + relativedelta(months=3)).date(), "入金条件": "出来高払い", "サイト(日)": 30},
@@ -66,7 +66,15 @@ def calculate_row_cashflow(amount, start_date, end_date, condition, site_days, m
         if pay_m in results.index: results[pay_m] += amount
     return results
 
-# --- 4. メイン UI (入力フォーム) ---
+# --- 4. 明細表の更新を即座に反映させるための関数 ---
+def sync_summary():
+    if "summary_editor" in st.session_state:
+        # エディタで編集された内容をセッションのデータに上書き保存
+        st.session_state.manual_summary = st.session_state["summary_editor"]["edited_rows"]
+        # ここでは単純に代入せず、元データフレームを更新する処理が必要なため
+        # 下記の「5. 計算と表示」内で統合的に処理します
+
+# --- 5. メイン UI ---
 st.title("💰 簡易資金繰りシミュレーター")
 
 with st.form("input_form"):
@@ -92,10 +100,10 @@ with st.form("input_form"):
     
     submitted = st.form_submit_button("🚀 計算を実行（明細表をリセット）")
 
-# --- 5. 計算と表示 ---
+# --- 6. 計算ロジック ---
 months_header = [(start_period + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
 
-# 「計算実行」が押された場合、または初期状態のみ自動計算を行う
+# ボタン押下時のみ案件表から明細表を新規作成
 if submitted or 'manual_summary' not in st.session_state:
     st.session_state.df = edited_df
     valid_df = edited_df[edited_df["案件名"].fillna("") != ""].copy()
@@ -108,7 +116,6 @@ if submitted or 'manual_summary' not in st.session_state:
         total_income += calculate_row_cashflow(amt, row["開始日"], row["終了日"], row["入金条件"], row["サイト(日)"], months_header)
         total_cost += calculate_row_cashflow(amt * rate, row["開始日"], row["終了日"], row["入金条件"], row["サイト(日)"], months_header)
 
-    # 明細表の初期値を保存
     st.session_state.manual_summary = pd.DataFrame({
         "入金合計": total_income,
         "原価支払合計": total_cost,
@@ -117,36 +124,39 @@ if submitted or 'manual_summary' not in st.session_state:
         "短期借入金": 0.0
     }).T
 
-# 資金繰り明細表の編集（セッションステートから読み込み、変更を保存）
+# --- 7. 明細表の表示と編集 ---
 st.subheader("📊 資金繰り明細表 (各数値は直接編集可能です)")
-# keyを指定することで、編集状態が戻るのを防ぐ
-edited_summary = st.data_editor(
+
+# data_editorの値を直接セッションステートで管理
+# keyを指定し、前回編集分を保持
+current_summary = st.data_editor(
     st.session_state.manual_summary,
     use_container_width=True,
-    key="summary_editor"
+    key="summary_editor_key"
 )
-# 編集された結果を即座にセッションに反映
-st.session_state.manual_summary = edited_summary
 
-# 最終収支の計算
-current_income = edited_summary.loc["入金合計"]
-current_cost = edited_summary.loc["原価支払合計"]
-current_sga = edited_summary.loc["販管費"]
-current_loan_repay = edited_summary.loc["借入返済"]
-short_term_loan = edited_summary.loc["短期借入金"]
+# 編集された最新データをセッションに保存（これが「1回で反映」の鍵）
+st.session_state.manual_summary = current_summary
+
+# 最終計算
+current_income = current_summary.loc["入金合計"]
+current_cost = current_summary.loc["原価支払合計"]
+current_sga = current_summary.loc["販管費"]
+current_loan_repay = current_summary.loc["借入返済"]
+short_term_loan = current_summary.loc["短期借入金"]
 
 monthly_cf = current_income + short_term_loan - current_cost - current_sga - current_loan_repay
 cash_balance = monthly_cf.cumsum() + initial_cash
 
 # 表示用まとめ
-final_view = pd.concat([edited_summary, pd.DataFrame({"月次収支": monthly_cf, "現預金残高": cash_balance}, index=months_header).T])
+final_view = pd.concat([current_summary, pd.DataFrame({"月次収支": monthly_cf, "現預金残高": cash_balance}, index=months_header).T])
 st.write("### 計算結果反映")
 st.dataframe(final_view.style.format("{:,.0f}"), use_container_width=True)
 
 st.subheader("📈 資金繰り推移グラフ")
 st.line_chart(cash_balance)
 
-# --- 6. PDF生成 ---
+# --- 8. PDF生成 ---
 def create_pdf():
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A3), leftMargin=30, rightMargin=30, topMargin=30)
