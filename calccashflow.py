@@ -35,11 +35,8 @@ FONT_NAME = load_font() or 'Helvetica'
 CATS = ["売上の部", "売上原価の部", "販管費の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]
 
 if 'pl_data' not in st.session_state:
-    # デフォルト項目の定義
     st.session_state.pl_data = {
-        "売上の部": pd.DataFrame([
-            {"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}
-        ]),
+        "売上の部": pd.DataFrame([{"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
         "売上原価の部": pd.DataFrame([
             {"項目": "外注費", "金額(千円)": 0, "入出金サイト(日)": 30},
             {"項目": "労務費", "金額(千円)": 0, "入出金サイト(日)": 30},
@@ -66,6 +63,7 @@ if 'normal_df' not in st.session_state:
     ])
 
 if 'calc_done' not in st.session_state: st.session_state.calc_done = False
+if 'ms_is_editing' not in st.session_state: st.session_state.ms_is_editing = False
 
 # --- 3. 補助関数 ---
 def calculate_cashflow_k(amount, start_date, end_date, condition, site_days, months_header):
@@ -95,7 +93,7 @@ app_mode = st.sidebar.radio("モード選択", ["通常モード (受注案件)"
 
 if app_mode == "通常モード (受注案件)":
     st.title("💰 通常シミュレーション")
-    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_v8")
+    st.session_state.normal_df = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_v9")
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns(4)
         init_cash = c1.number_input("期首現金(千円)", value=10000)
@@ -145,32 +143,20 @@ else:
                 name = str(r["項目"])
                 val = float(r["金額(千円)"]) if pd.notna(r["金額(千円)"]) else 0.0
                 site = float(r["入出金サイト(日)"]) if pd.notna(r["入出金サイト(日)"]) else 0.0
-                
                 pl_dict[cat] += val
-                
                 if cat in ["売上の部", "雑収益・雑損失の部", "特別利益・特別損失の部"]:
                     if not any(x in name for x in ["損失", "損", "利息", "税"]): inc_list.append(name)
-                
                 sm, vals = int(round(site / 30)), [0.0]*12
                 for m in range(12): 
                     if m + sm < 12: vals[m + sm] = val
                 cf_detail[name] = vals
         
-        # 利益の階層計算
-        rev = pl_dict["売上の部"]
-        cogs = pl_dict["売上原価の部"]
-        gp = rev - cogs
-        sga = pl_dict["販管費の部"]
-        op = gp - sga
-        non_op = pl_dict["雑収益・雑損失の部"]
-        ord_p = op + non_op
-        extra = pl_dict["特別利益・特別損失の部"]
-        ibtax = ord_p + extra
-        
+        # PL計算
         st.session_state.pl_summary = pd.DataFrame({
-            "売上高": rev, "売上原価": cogs, "売上総利益": gp,
-            "販売管理費": sga, "営業利益": op, "営業外損益": non_op,
-            "経常利益": ord_p, "特別損益": extra, "税引前当期純利益": ibtax
+            "売上高": pl_dict["売上の部"], "売上原価": pl_dict["売上原価の部"], "売上総利益": pl_dict["売上の部"] - pl_dict["売上原価の部"],
+            "販売管理費": pl_dict["販管費の部"], "営業利益": (pl_dict["売上の部"] - pl_dict["売上原価の部"]) - pl_dict["販管費の部"],
+            "営業外損益": pl_dict["雑収益・雑損失の部"], "経常利益": ((pl_dict["売上の部"] - pl_dict["売上原価の部"]) - pl_dict["販管費の部"]) + pl_dict["雑収益・雑損失の部"],
+            "特別損益": pl_dict["特別利益・特別損失の部"], "税引前当期純利益": (((pl_dict["売上の部"] - pl_dict["売上原価の部"]) - pl_dict["販管費の部"]) + pl_dict["雑収益・雑損失の部"]) + pl_dict["特別利益・特別損失の部"]
         }, index=st.session_state.months_header).T
 
         cf_detail.update({"法人税等": [0.0]*12, "借入金返済": [m_loan_repay]*12, "短期借入金": [0.0]*12})
@@ -178,7 +164,7 @@ else:
         st.session_state.income_items, st.session_state.calc_done = inc_list, True
         st.rerun()
 
-# --- 5. 結果表示エリア ---
+# --- 5. 結果表示 & ハンド修正対応 ---
 if st.session_state.calc_done:
     st.divider()
     if app_mode == "詳細モード (損益計算書)":
@@ -187,16 +173,31 @@ if st.session_state.calc_done:
         st.divider()
 
     st.subheader("📋 資金繰り明細表")
-    ms = st.session_state.manual_summary.apply(pd.to_numeric, errors='coerce').fillna(0)
-    in_sum = ms.loc[ms.index.isin(st.session_state.income_items)].sum()
-    out_sum = ms.loc[ms.index.difference(list(st.session_state.income_items) + ["短期借入金", "月次収支", "現預金残高"])].sum()
-    m_cf = in_sum + ms.loc["短期借入金"] - out_sum
+    st.info("💡 下の「明細を直接修正する」ボタンから、短期借入金の入力や金額の調整が可能です。")
+    
+    # ハンド修正ロジックの強化
+    if not st.session_state.ms_is_editing:
+        if st.button("📝 明細を直接修正する", type="secondary"):
+            st.session_state.ms_is_editing = True; st.rerun()
+        ms = st.session_state.manual_summary
+    else:
+        ms = st.data_editor(st.session_state.manual_summary, use_container_width=True, key="ms_hand_fix")
+        if st.button("✅ 修正を確定して計算に反映", type="primary"):
+            st.session_state.manual_summary = ms
+            st.session_state.ms_is_editing = False; st.rerun()
+
+    # 計算用
+    ms_num = ms.apply(pd.to_numeric, errors='coerce').fillna(0)
+    in_sum = ms_num.loc[ms_num.index.isin(st.session_state.income_items)].sum()
+    out_sum = ms_num.loc[ms_num.index.difference(list(st.session_state.income_items) + ["短期借入金", "月次収支", "現預金残高"])].sum()
+    m_cf = in_sum + ms_num.loc["短期借入金"] - out_sum
     c_bal = (m_cf.cumsum() + st.session_state.initial_cash).rename("現預金残高")
-    final_cf = pd.concat([ms, pd.DataFrame({"月次収支": m_cf, "現預金残高": c_bal}).T])
+    final_cf = pd.concat([ms_num, pd.DataFrame({"月次収支": m_cf, "現預金残高": c_bal}).T])
+    
     st.dataframe(final_cf.style.format("{:,.0f}"), use_container_width=True)
     st.line_chart(c_bal)
 
-    # PDF生成ロジック
+    # PDF生成
     def make_report_pdf():
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20)
@@ -205,31 +206,29 @@ if st.session_state.calc_done:
         elements.append(Paragraph(f"財務シミュレーション報告書 ({app_mode})", s['Title']))
         
         # 1. 入力データ
-        elements.append(Paragraph("【1. 入力データ設定】", s['Normal']))
+        elements.append(Paragraph("【1. 入力設定】", s['Normal']))
         df_in = st.session_state.normal_df if app_mode == "通常モード (受注案件)" else pd.concat([st.session_state.pl_data[c] for c in CATS])
         t1 = Table([df_in.columns.tolist()] + df_in.fillna("").values.tolist(), hAlign='LEFT')
         t1.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 8), ('GRID', (0,0), (-1,-1), 0.5, colors.grey)]))
-        elements.append(t1); elements.append(Spacer(1, 20))
+        elements.append(t1); elements.append(Spacer(1, 15))
 
-        # 2. 損益試算表（詳細モードのみ）
+        # 2. PL (詳細のみ)
         if app_mode == "詳細モード (損益計算書)":
             elements.append(Paragraph("【2. 月次損益試算表】", s['Normal']))
-            pl_data = [["項目"] + st.session_state.months_header] + [[i] + [f"{v:,.0f}" for v in r] for i, r in st.session_state.pl_summary.iterrows()]
-            t2 = Table(pl_data, hAlign='LEFT')
-            t2.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 7), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('BACKGROUND', (0,2), (-1,2), colors.lightgrey), ('BACKGROUND', (0,4), (-1,4), colors.lightgrey), ('BACKGROUND', (0,6), (-1,6), colors.lightgrey)]))
-            elements.append(t2); elements.append(Spacer(1, 20))
+            pl_dat = [["項目"] + st.session_state.months_header] + [[i] + [f"{v:,.0f}" for v in r] for i, r in st.session_state.pl_summary.iterrows()]
+            t2 = Table(pl_dat, hAlign='LEFT')
+            t2.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 7), ('GRID', (0,0), (-1,-1), 0.5, colors.grey)]))
+            elements.append(t2); elements.append(Spacer(1, 15))
 
-        # 3. 資金繰り明細
-        elements.append(Paragraph(f"【{'3' if app_mode == '詳細モード' else '2'}. 資金繰り明細表】", s['Normal']))
-        cf_data = [["項目"] + st.session_state.months_header] + [[i] + [f"{v:,.0f}" for v in r] for i, r in final_cf.iterrows()]
-        t3 = Table(cf_data, hAlign='LEFT')
+        # 3. CF
+        elements.append(Paragraph("【資金繰り明細表（修正反映後）】", s['Normal']))
+        cf_dat = [["項目"] + st.session_state.months_header] + [[i] + [f"{v:,.0f}" for v in r] for i, r in final_cf.iterrows()]
+        t3 = Table(cf_dat, hAlign='LEFT')
         t3.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 6), ('GRID', (0,0), (-1,-1), 0.5, colors.grey), ('BACKGROUND', (0,-1), (-1,-1), colors.whitesmoke)]))
         elements.append(t3)
         doc.build(elements)
         return buffer.getvalue()
 
     st.sidebar.divider()
-    st.sidebar.download_button("📄 財務報告書PDF", data=make_report_pdf(), file_name="financial_report.pdf")
-    if app_mode == "詳細モード (損益計算書)":
-        st.sidebar.download_button("📊 損益試算表CSV", data=st.session_state.pl_summary.to_csv().encode('utf_8_sig'), file_name="pl_summary.csv")
-    st.sidebar.download_button("📈 資金繰り明細CSV", data=final_cf.to_csv().encode('utf_8_sig'), file_name="cf_detail.csv")
+    st.sidebar.download_button("📄 報告書PDF出力", data=make_report_pdf(), file_name="report.pdf")
+    st.sidebar.download_button("📊 資金繰りCSV", data=final_cf.to_csv().encode('utf_8_sig'), file_name="cf_detail.csv")
