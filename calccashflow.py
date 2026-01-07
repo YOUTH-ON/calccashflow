@@ -102,17 +102,23 @@ else:
         with col_c3: s_date = st.date_input("シミュレーション開始月", datetime.today().replace(day=1))
 
     st.subheader("損益計算書 各部の設定")
+    
+    # ① 「編集する」ボタンを上部に配置
+    if not st.session_state.pl_edit_mode:
+        if st.button("📝 損益計算書を編集する"):
+            st.session_state.pl_edit_mode = True
+            st.rerun()
+    else:
+        if st.button("💾 編集内容を保存"):
+            st.session_state.pl_edit_mode = False
+            st.rerun()
+
     for cat in CATS:
         st.write(f"#### {cat}")
         if not st.session_state.pl_edit_mode:
             st.dataframe(st.session_state.pl_data[cat], use_container_width=True, hide_index=True)
         else:
             st.session_state.pl_data[cat] = st.data_editor(st.session_state.pl_data[cat], num_rows="dynamic", use_container_width=True, hide_index=True, key=f"ed_{cat}")
-    
-    if not st.session_state.pl_edit_mode:
-        if st.button("📝 損益計算書を編集する"): st.session_state.pl_edit_mode = True; st.rerun()
-    else:
-        if st.button("💾 編集内容を保存"): st.session_state.pl_edit_mode = False; st.rerun()
 
     if st.button("📉 詳細計算実行", type="primary"):
         st.session_state.months_header = [(s_date + relativedelta(months=i)).strftime("%Y/%m") for i in range(12)]
@@ -161,14 +167,13 @@ if st.session_state.get('calc_done'):
         elements.append(Paragraph(f"財務報告書 ({app_mode})", t_style))
         elements.append(Spacer(1, 10))
         
-        # 入力データの表を追加
         if app_mode == "通常モード (受注案件)":
             elements.append(Paragraph("【受注案件入力データ】", h_style))
             data = [st.session_state.normal_df.columns.tolist()] + st.session_state.normal_df.values.tolist()
         else:
             elements.append(Paragraph("【損益計算書 設定データ】", h_style))
             all_pl = pd.concat([st.session_state.pl_data[c] for c in CATS])
-            data = [["項目", "金額", "サイト"]] + all_pl.values.tolist()
+            data = [["項目", "金額", "サイト"]] + [[r[0], r[1], r[2]] for r in all_pl.values]
         
         t1 = Table(data, hAlign='LEFT')
         t1.setStyle(TableStyle([('FONT', (0,0), (-1,-1), FONT_NAME, 7), ('GRID', (0,0), (-1,-1), 0.5, colors.grey)]))
@@ -182,22 +187,19 @@ if st.session_state.get('calc_done'):
         elements.append(t2)
         return elements
 
-    # サイドバーに出力ボタンを配置
     st.sidebar.divider()
     st.sidebar.subheader("📥 データの書き出し")
     
-    # PDF出力
+    # PDF出力 (A4縦)
     pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=portrait(A4))
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=portrait(A4), leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40)
     doc.build(get_output_elements())
     st.sidebar.download_button("📄 PDFダウンロード (A4縦)", data=pdf_buffer.getvalue(), file_name="report.pdf")
 
-    # CSV出力 (全データを統合)
+    # CSV出力
     csv_buffer = io.StringIO()
-    if app_mode == "通常モード (受注案件)":
-        st.session_state.normal_df.to_csv(csv_buffer, index=False)
-    else:
-        pd.concat([st.session_state.pl_data[c] for c in CATS]).to_csv(csv_buffer, index=False)
+    if app_mode == "通常モード (受注案件)": st.session_state.normal_df.to_csv(csv_buffer, index=False)
+    else: pd.concat([st.session_state.pl_data[c] for c in CATS]).to_csv(csv_buffer, index=False)
     csv_buffer.write("\n--- 資金繰り明細表 ---\n")
     final_view.to_csv(csv_buffer)
     st.sidebar.download_button("Excel/CSVダウンロード", data=csv_buffer.getvalue().encode('utf_8_sig'), file_name="data.csv", mime="text/csv")
