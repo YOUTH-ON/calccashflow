@@ -36,7 +36,7 @@ CATS = ["売上の部", "売上原価の部", "販管費の部", "雑収益・�
 
 if 'pl_data' not in st.session_state:
     st.session_state.pl_data = {
-        "売上の部": pd.DataFrame([{"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
+        "売上の部": pd.DataFrame([{"項目": "売高高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
         "売上原価の部": pd.DataFrame([
             {"項目": "外注費", "金額(千円)": 0, "入出金サイト(日)": 30},
             {"項目": "労務費", "金額(千円)": 0, "入出金サイト(日)": 30},
@@ -98,16 +98,27 @@ if app_mode == "通常モード (受注案件)":
     
     if not st.session_state.is_editing_normal:
         if st.button("📝 案件表を編集する", key="btn_edit_normal"):
-            st.session_state.is_editing_normal = True
-            st.rerun()
+            st.session_state.is_editing_normal = True; st.rerun()
         st.dataframe(st.session_state.normal_df, use_container_width=True, hide_index=True)
     else:
-        st.warning("⚠️ 案件情報を入力中です。「確定」ボタンを押すまで計算には反映されません。")
-        temp_normal = st.data_editor(st.session_state.normal_df, num_rows="dynamic", use_container_width=True, hide_index=True, key="ed_normal_temp")
+        # 入金条件をドロップダウンに設定
+        temp_normal = st.data_editor(
+            st.session_state.normal_df, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            hide_index=True, 
+            key="ed_normal_temp_v10",
+            column_config={
+                "入金条件": st.column_config.SelectboxColumn(
+                    "入金条件",
+                    help="入金タイミングを選択してください",
+                    options=["出来高払い", "毎月均等払い", "完工時一括"],
+                    required=True,
+                )
+            }
+        )
         if st.button("✅ 案件入力を確定する", type="primary", key="btn_fix_normal"):
-            st.session_state.normal_df = temp_normal
-            st.session_state.is_editing_normal = False
-            st.rerun()
+            st.session_state.normal_df = temp_normal; st.session_state.is_editing_normal = False; st.rerun()
     
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns(4)
@@ -129,6 +140,7 @@ if app_mode == "通常モード (受注案件)":
 
 else:
     st.title("📊 詳細シミュレーション")
+    # --- 詳細モード（変更なし） ---
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
         init_cash = c1.number_input("期首現預金残高(千円)", value=20000)
@@ -175,7 +187,7 @@ else:
         st.session_state.income_items, st.session_state.calc_done = inc_list, True
         st.rerun()
 
-# --- 5. 結果表示 & ハンド修正 ---
+# --- 5. 結果表示エリア（共通） ---
 if st.session_state.calc_done:
     st.divider()
     if app_mode == "詳細モード (損益計算書)":
@@ -185,11 +197,11 @@ if st.session_state.calc_done:
 
     st.subheader("📋 資金繰り明細表")
     if not st.session_state.ms_is_editing:
-        if st.button("📝 明細を直接修正する", type="secondary"): st.session_state.ms_is_editing = True; st.rerun()
+        if st.button("📝 明細を直接修正する"): st.session_state.ms_is_editing = True; st.rerun()
         ms = st.session_state.manual_summary
     else:
-        ms = st.data_editor(st.session_state.manual_summary, use_container_width=True, key="ms_hand_fix_v2")
-        if st.button("✅ 修正を確定して計算に反映", type="primary"):
+        ms = st.data_editor(st.session_state.manual_summary, use_container_width=True, key="ms_hand_fix_v10")
+        if st.button("✅ 修正を確定して計算に反映"):
             st.session_state.manual_summary = ms; st.session_state.ms_is_editing = False; st.rerun()
 
     ms_num = ms.apply(pd.to_numeric, errors='coerce').fillna(0)
@@ -201,7 +213,7 @@ if st.session_state.calc_done:
     st.dataframe(final_cf.style.format("{:,.0f}"), use_container_width=True)
     st.line_chart(c_bal)
 
-    # PDF生成
+    # PDF生成ロジック
     def make_report_pdf():
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20)
