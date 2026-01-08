@@ -12,7 +12,7 @@ import io
 import os
 import requests
 
-st.set_page_config(layout="wide", page_title="財務シミュレーター Pro")
+st.set_page_config(layout="wide", page_title="セルフキャッシュフローシミュレーター")
 
 # --- 1. フォント設定 ---
 @st.cache_resource
@@ -36,7 +36,7 @@ CATS = ["売上の部", "売上原価の部", "販管費の部", "雑収益・�
 
 if 'pl_data' not in st.session_state:
     st.session_state.pl_data = {
-        "売上の部": pd.DataFrame([{"項目": "売高高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
+        "売上の部": pd.DataFrame([{"項目": "売上高", "金額(千円)": 10000, "入出金サイト(日)": 30}]),
         "売上原価の部": pd.DataFrame([
             {"項目": "外注費", "金額(千円)": 0, "入出金サイト(日)": 30},
             {"項目": "労務費", "金額(千円)": 0, "入出金サイト(日)": 30},
@@ -89,11 +89,11 @@ def calculate_cashflow_k(amount, start_date, end_date, condition, site_days, mon
     return results
 
 # --- 4. メインUI ---
-st.sidebar.title("🛠 設定")
+st.sidebar.title("シミュレートモード選択")
 app_mode = st.sidebar.radio("モード選択", ["通常モード (受注案件)", "詳細モード (損益計算書)"])
 
 if app_mode == "通常モード (受注案件)":
-    st.title("💰 通常シミュレーション")
+    st.title("💰 簡易シミュレーション")
     st.subheader("📋 受注案件入力表")
     
     if not st.session_state.is_editing_normal:
@@ -219,7 +219,7 @@ if st.session_state.calc_done:
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20)
         elements, s = [], styles.getSampleStyleSheet()
         s['Normal'].fontName = FONT_NAME; s['Title'].fontName = FONT_NAME
-        elements.append(Paragraph(f"財務シミュレーション報告書 ({app_mode})", s['Title']))
+        elements.append(Paragraph(f"シミュレーションレポート ({app_mode})", s['Title']))
         elements.append(Paragraph("【1. 入力設定】", s['Normal']))
         df_in = st.session_state.normal_df if app_mode == "通常モード (受注案件)" else pd.concat([st.session_state.pl_data[c] for c in CATS])
         t1 = Table([df_in.columns.tolist()] + df_in.fillna("").values.tolist(), hAlign='LEFT')
@@ -242,3 +242,4 @@ if st.session_state.calc_done:
     st.sidebar.divider()
     st.sidebar.download_button("📄 報告書PDF出力", data=make_report_pdf(), file_name="report.pdf")
     st.sidebar.download_button("📊 資金繰りCSV", data=final_cf.to_csv().encode('utf_8_sig'), file_name="cf_detail.csv")
+
